@@ -19,3 +19,5 @@
 -- v0.4.2 - adding ssl verification & deletion of active support methods
 
 -- v0.4.5 - pushing typhoeus version
+
+-- v0.4.6 - handling infinite redirection loop

@@ -3,9 +3,13 @@ require "tweakphoeus/user_agent"
 require "typhoeus"
 
 module Tweakphoeus
+  class TooManyRedirections < Exception; end
+
   class Client
     attr_accessor :cookie_jar
     attr_accessor :base_headers
+
+    MAX_REDIRECTIONS = 10
 
     def initialize(ua_systems: [:linux, :mac])
       @cookie_jar = {}
@@ -21,19 +25,19 @@ module Tweakphoeus
       @ssl_verifypeer = true
     end
 
-    def get(url, body: nil, params: nil, headers: nil, redirect: true, ssl_verifypeer: @ssl_verifypeer)
+    def get(url, body: nil, params: nil, headers: nil, redirect: true, ssl_verifypeer: @ssl_verifypeer, max_redirections: MAX_REDIRECTIONS)
       set_referer_from_headers(headers)
-      http_request(url, body: body, params: params, headers: headers, redirect: redirect, method: :get, ssl_verifypeer: ssl_verifypeer)
+      http_request(url, body: body, params: params, headers: headers, redirect: redirect, method: :get, ssl_verifypeer: ssl_verifypeer, max_redirections: max_redirections)
     end
 
-    def delete(url, body: nil, headers: nil, redirect: true, ssl_verifypeer: @ssl_verifypeer)
+    def delete(url, body: nil, headers: nil, redirect: true, ssl_verifypeer: @ssl_verifypeer, max_redirections: MAX_REDIRECTIONS)
       set_referer_from_headers(headers)
-      http_request(url, body: body, headers: headers, redirect: redirect, method: :delete, ssl_verifypeer: ssl_verifypeer)
+      http_request(url, body: body, headers: headers, redirect: redirect, method: :delete, ssl_verifypeer: ssl_verifypeer, max_redirections: max_redirections)
     end
 
-    def post(url, body: nil, params: nil, headers: nil, redirect: false, ssl_verifypeer: @ssl_verifypeer)
+    def post(url, body: nil, params: nil, headers: nil, redirect: false, ssl_verifypeer: @ssl_verifypeer, max_redirections: MAX_REDIRECTIONS)
       set_referer_from_headers(headers)
-      http_request(url, body: body, params: nil, headers: headers, redirect: redirect, method: :post, ssl_verifypeer: ssl_verifypeer)
+      http_request(url, body: body, params: nil, headers: headers, redirect: redirect, method: :post, ssl_verifypeer: ssl_verifypeer, max_redirections: max_redirections)
     end
 
     def get_hide_inputs response
@@ -92,24 +96,33 @@ module Tweakphoeus
 
     private
 
-    def http_request(url, body: nil, params: nil, headers: nil, redirect: false, method: :get, ssl_verifypeer: @ssl_verifypeer)
+    def http_request(url, body: nil, params: nil, headers: nil, redirect: false, method: :get, ssl_verifypeer: @ssl_verifypeer, max_redirections: 10, redirections: {})
       request_headers = merge_default_headers(headers)
       request_headers["Cookie"] = cookie_string(url, headers)
       request_headers["Referer"] = get_referer
       response = Typhoeus.send(method, url, body: body, params: params, headers: request_headers, proxy: @proxy, proxyuserpwd: @proxyuserpwd, ssl_verifypeer: ssl_verifypeer)
       obtain_cookies(response)
       set_referer(url) if method != :post
+
       if redirect && has_redirect?(response)
-        if response.code != 307
-          method = :get
-          body = nil
+        redirections[url] ||= 0
+        redirections[url] += 1
+        if redirections.all?{ |_, v| v < max_redirections }
+          if response.code != 307
+            method = :get
+            body = nil
+          end
+          response = http_request(redirect_url(response),
+                                  body: body,
+                                  headers: headers,
+                                  redirect: redirect,
+                                  method: method,
+                                  ssl_verifypeer: ssl_verifypeer,
+                                  max_redirections: max_redirections,
+                                  redirections: redirections)
+        else
+          raise(TooManyRedirections, "Exceding #{max_redirections} redirections to #{url}")
         end
-        response = http_request(redirect_url(response),
-                                body: body,
-                                headers: headers,
-                                redirect: redirect,
-                                method: method,
-                                ssl_verifypeer: ssl_verifypeer)
       end
       response
     end
